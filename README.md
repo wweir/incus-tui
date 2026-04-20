@@ -13,6 +13,7 @@
   - 列表浏览
   - 刷新
 - 支持 `--remote`（remote 名称或 URL 端点）/`--project`/`--timeout`
+- 订阅 Incus monitor 事件并自动实时刷新当前模块
 
 ## 快捷键
 

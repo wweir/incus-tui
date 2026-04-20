@@ -30,6 +30,7 @@ func (noopService) ListWarnings(context.Context) ([]client.Warning, error)      
 func (noopService) CreateResource(context.Context, string, string, string) error { return nil }
 func (noopService) UpdateResource(context.Context, string, string, string) error { return nil }
 func (noopService) DeleteResource(context.Context, string, string) error         { return nil }
+func (noopService) WaitForEvent(context.Context) (string, error)                 { return "", context.Canceled }
 
 func TestSwitchContextCmd(t *testing.T) {
 	factory := func(remote, project string) (client.InstanceService, error) {

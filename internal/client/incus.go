@@ -100,6 +100,7 @@ type InstanceService interface {
 	CreateResource(ctx context.Context, section, name, value string) error
 	UpdateResource(ctx context.Context, section, name, value string) error
 	DeleteResource(ctx context.Context, section, name string) error
+	WaitForEvent(ctx context.Context) (string, error)
 }
 
 type IncusClient struct {
@@ -511,6 +512,37 @@ func (c *IncusClient) DeleteResource(ctx context.Context, section, name string) 
 		return c.server.DeleteWarning(name)
 	default:
 		return fmt.Errorf("delete %s is not supported", section)
+	}
+}
+
+func (c *IncusClient) WaitForEvent(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	listener, err := c.server.GetEventsByType([]string{api.EventTypeLifecycle, api.EventTypeOperation})
+	if err != nil {
+		return "", fmt.Errorf("create event listener: %w", err)
+	}
+	defer listener.Disconnect()
+
+	events := make(chan api.Event, 1)
+	target, err := listener.AddHandler(nil, func(event api.Event) {
+		select {
+		case events <- event:
+		default:
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("add event handler: %w", err)
+	}
+	defer func() { _ = listener.RemoveHandler(target) }()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case event := <-events:
+		return event.Type, nil
 	}
 }
 

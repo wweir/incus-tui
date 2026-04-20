@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -74,6 +75,11 @@ type contextSwitchedMsg struct {
 	err     error
 }
 
+type eventReceivedMsg struct {
+	eventType string
+	err       error
+}
+
 type Model struct {
 	instances     instances.Model
 	svc           client.InstanceService
@@ -132,7 +138,7 @@ func New(
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.instances.Init()
+	return tea.Batch(m.instances.Init(), m.waitEventCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -230,7 +236,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache = make(map[Section]tablePayload, len(orderedSections))
 		m.loaded = make(map[Section]bool, len(orderedSections))
 		m.status[m.currentSection()] = fmt.Sprintf("Switched to remote=%q project=%q", renderContext(msg.remote), renderContext(msg.project))
-		return m, m.refreshSectionCmd(m.currentSection())
+		return m, tea.Batch(m.refreshSectionCmd(m.currentSection()), m.waitEventCmd())
+	case eventReceivedMsg:
+		if msg.err != nil {
+			if !errors.Is(msg.err, context.Canceled) {
+				m.status[m.currentSection()] = fmt.Sprintf("Monitor error: %v", msg.err)
+			}
+			return m, m.waitEventCmd()
+		}
+		if m.loading || m.formOpen || m.confirming || m.switching {
+			return m, m.waitEventCmd()
+		}
+		m.status[m.currentSection()] = fmt.Sprintf("Monitor event: %s", msg.eventType)
+		return m, tea.Batch(m.refreshSectionCmd(m.currentSection()), m.waitEventCmd())
 	}
 
 	if m.currentSection() == SectionInstances {
@@ -356,6 +374,15 @@ func (m Model) switchContextCmd(kind, value string) tea.Cmd {
 
 		svc, err := m.newService(nextRemote, nextProject)
 		return contextSwitchedMsg{svc: svc, remote: nextRemote, project: nextProject, err: err}
+	}
+}
+
+func (m Model) waitEventCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		eventType, err := m.svc.WaitForEvent(ctx)
+		return eventReceivedMsg{eventType: eventType, err: err}
 	}
 }
 

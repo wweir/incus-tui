@@ -41,8 +41,9 @@
 2. `app.Model` 处理全局导航和刷新行为。
 3. Instances 模块走 `internal/modules/instances`（含 create/update/delete 表单与确认流）；其它模块走 app 内统一表格数据管线，并共享 create/update/delete 表单与确认流。
 4. Project/Remote 支持运行时动态切换，切换成功后重建服务连接并刷新当前模块。
-5. `tea.Cmd` 在后台调用 `InstanceService`。
-6. 结果回传为消息，更新缓存与状态栏后重新渲染。
+5. 通过 Incus 事件订阅（monitor）监听 lifecycle/operation 事件，触发当前模块实时刷新。
+6. `tea.Cmd` 在后台调用 `InstanceService`。
+7. 结果回传为消息，更新缓存与状态栏后重新渲染。
 
 ## Design Decisions
 
