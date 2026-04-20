@@ -84,6 +84,8 @@ type Warning struct {
 
 type InstanceService interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
+	CreateInstance(ctx context.Context, name, image, instanceType string) error
+	UpdateInstanceConfig(ctx context.Context, name, key, value string) error
 	StartInstance(ctx context.Context, name string) error
 	StopInstance(ctx context.Context, name string) error
 	DeleteInstance(ctx context.Context, name string) error
@@ -95,6 +97,9 @@ type InstanceService interface {
 	ListClusterMembers(ctx context.Context) ([]ClusterMember, error)
 	ListOperations(ctx context.Context) ([]Operation, error)
 	ListWarnings(ctx context.Context) ([]Warning, error)
+	CreateResource(ctx context.Context, section, name, value string) error
+	UpdateResource(ctx context.Context, section, name, value string) error
+	DeleteResource(ctx context.Context, section, name string) error
 }
 
 type IncusClient struct {
@@ -212,6 +217,64 @@ func (c *IncusClient) ListInstances(ctx context.Context) ([]Instance, error) {
 		instances = append(instances, ins)
 	}
 	return instances, nil
+}
+
+func (c *IncusClient) CreateInstance(ctx context.Context, name, image, instanceType string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("create instance %q: %w", name, err)
+	}
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("create instance: name is required")
+	}
+	if strings.TrimSpace(image) == "" {
+		return fmt.Errorf("create instance %q: image is required", name)
+	}
+	req := api.InstancesPost{
+		Name: name,
+		Source: api.InstanceSource{
+			Type:  "image",
+			Alias: image,
+		},
+	}
+	if strings.TrimSpace(instanceType) == "virtual-machine" {
+		req.Type = api.InstanceTypeVM
+	} else {
+		req.Type = api.InstanceTypeContainer
+	}
+	op, err := c.server.CreateInstance(req)
+	if err != nil {
+		return fmt.Errorf("create instance %q: %w", name, err)
+	}
+	if err := op.WaitContext(ctx); err != nil {
+		return fmt.Errorf("wait create instance %q: %w", name, err)
+	}
+	return nil
+}
+
+func (c *IncusClient) UpdateInstanceConfig(ctx context.Context, name, key, value string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("update instance %q: %w", name, err)
+	}
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(key) == "" {
+		return fmt.Errorf("update instance: name and key are required")
+	}
+	instance, etag, err := c.server.GetInstance(name)
+	if err != nil {
+		return fmt.Errorf("get instance %q: %w", name, err)
+	}
+	put := instance.Writable()
+	if put.Config == nil {
+		put.Config = map[string]string{}
+	}
+	put.Config[key] = value
+	op, err := c.server.UpdateInstance(name, put, etag)
+	if err != nil {
+		return fmt.Errorf("update instance %q: %w", name, err)
+	}
+	if err := op.WaitContext(ctx); err != nil {
+		return fmt.Errorf("wait update instance %q: %w", name, err)
+	}
+	return nil
 }
 
 func (c *IncusClient) StartInstance(ctx context.Context, name string) error {
@@ -351,6 +414,104 @@ func (c *IncusClient) ListWarnings(ctx context.Context) ([]Warning, error) {
 			return Warning{UUID: warning.UUID, Severity: warning.Severity, Type: warning.Type, Location: warning.Location, Project: warning.Project, Count: warning.Count, Message: warning.LastMessage, LastSeenAt: warning.LastSeenAt}
 		},
 	)
+}
+
+func (c *IncusClient) CreateResource(ctx context.Context, section, name, value string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("create %s %q: %w", section, name, err)
+	}
+	switch section {
+	case "Storage":
+		return c.server.CreateStoragePool(api.StoragePoolsPost{Name: name, Driver: value})
+	case "Networks":
+		return c.server.CreateNetwork(api.NetworksPost{Name: name, Type: value})
+	case "Profiles":
+		return c.server.CreateProfile(api.ProfilesPost{Name: name, ProfilePut: api.ProfilePut{Description: value}})
+	case "Projects":
+		return c.server.CreateProject(api.ProjectsPost{Name: name, ProjectPut: api.ProjectPut{Description: value}})
+	default:
+		return fmt.Errorf("create %s is not supported", section)
+	}
+}
+
+func (c *IncusClient) UpdateResource(ctx context.Context, section, name, value string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("update %s %q: %w", section, name, err)
+	}
+	switch section {
+	case "Storage":
+		pool, etag, err := c.server.GetStoragePool(name)
+		if err != nil {
+			return fmt.Errorf("get storage pool %q: %w", name, err)
+		}
+		put := pool.Writable()
+		put.Description = value
+		return c.server.UpdateStoragePool(name, put, etag)
+	case "Networks":
+		network, etag, err := c.server.GetNetwork(name)
+		if err != nil {
+			return fmt.Errorf("get network %q: %w", name, err)
+		}
+		put := network.Writable()
+		put.Description = value
+		return c.server.UpdateNetwork(name, put, etag)
+	case "Profiles":
+		profile, etag, err := c.server.GetProfile(name)
+		if err != nil {
+			return fmt.Errorf("get profile %q: %w", name, err)
+		}
+		put := profile.Writable()
+		put.Description = value
+		return c.server.UpdateProfile(name, put, etag)
+	case "Projects":
+		project, etag, err := c.server.GetProject(name)
+		if err != nil {
+			return fmt.Errorf("get project %q: %w", name, err)
+		}
+		put := project.Writable()
+		put.Description = value
+		return c.server.UpdateProject(name, put, etag)
+	case "Cluster":
+		member, etag, err := c.server.GetClusterMember(name)
+		if err != nil {
+			return fmt.Errorf("get cluster member %q: %w", name, err)
+		}
+		put := member.Writable()
+		put.Description = value
+		return c.server.UpdateClusterMember(name, put, etag)
+	default:
+		return fmt.Errorf("update %s is not supported", section)
+	}
+}
+
+func (c *IncusClient) DeleteResource(ctx context.Context, section, name string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete %s %q: %w", section, name, err)
+	}
+	switch section {
+	case "Images":
+		op, err := c.server.DeleteImage(name)
+		if err != nil {
+			return fmt.Errorf("delete image %q: %w", name, err)
+		}
+		return op.WaitContext(ctx)
+	case "Storage":
+		return c.server.DeleteStoragePool(name)
+	case "Networks":
+		return c.server.DeleteNetwork(name)
+	case "Profiles":
+		return c.server.DeleteProfile(name)
+	case "Projects":
+		return c.server.DeleteProject(name)
+	case "Cluster":
+		return c.server.DeleteClusterMember(name, false)
+	case "Operations":
+		return c.server.DeleteOperation(name)
+	case "Warnings":
+		return c.server.DeleteWarning(name)
+	default:
+		return fmt.Errorf("delete %s is not supported", section)
+	}
 }
 
 func runWithContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {

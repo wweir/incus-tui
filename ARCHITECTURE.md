@@ -39,7 +39,7 @@
 
 1. 用户按键触发 Bubble Tea `Update`。
 2. `app.Model` 处理全局导航和刷新行为。
-3. Instances 模块走 `internal/modules/instances`；其它模块走 app 内统一表格数据管线。
+3. Instances 模块走 `internal/modules/instances`（含 create/update/delete 表单与确认流）；其它模块走 app 内统一表格数据管线，并共享 create/update/delete 表单与确认流。
 4. `tea.Cmd` 在后台调用 `InstanceService`。
 5. 结果回传为消息，更新缓存与状态栏后重新渲染。
 
