@@ -21,7 +21,7 @@ var (
 
 func main() {
 	cfg := config.Default()
-	flag.StringVar(&cfg.Remote, "remote", cfg.Remote, "Incus remote name")
+	flag.StringVar(&cfg.Remote, "remote", cfg.Remote, "Incus remote endpoint URL (http/https)")
 	flag.StringVar(&cfg.Project, "project", cfg.Project, "Incus project name")
 	flag.DurationVar(&cfg.CommandTimeout, "timeout", cfg.CommandTimeout, "Incus command timeout")
 	flag.Parse()
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	instanceModule := instances.New(incusSvc, cfg.CommandTimeout)
-	application := app.New(instanceModule)
+	application := app.New(incusSvc, cfg.CommandTimeout, instanceModule)
 
 	program := tea.NewProgram(application, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {

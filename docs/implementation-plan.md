@@ -7,19 +7,22 @@
 - 接入 Bubble Tea 并实现实例列表界面
 - 实现实例操作：启动、停止、删除
 - 提供构建与质量检查入口
-- 建立功能侧边栏导航骨架
-- 将实例管理能力切换到 Incus 官方 Go client
+- 建立功能侧边栏导航
+- 接入 Incus 官方 Go client
+- 实现 Images/Storage/Networks/Profiles/Projects/Cluster/Operations/Warnings 列表浏览
 
 ### Status
 - [x] 项目结构初始化
 - [x] Core/Instances MVP 实现
 - [x] 文档（ARCHITECTURE/README）补齐
-- [x] 侧边栏导航骨架实现
+- [x] 侧边栏导航实现
 - [x] 默认本地连接 + 官方 Go client 接入
+- [x] 其它模块列表浏览能力
 - [ ] Phase 1 验收与问题清单
 
 ## Next Steps
 
-1. 补齐非 Instances 模块（Images/Storage/Networks）最小可用列表页
-2. 支持 Incus remote 名称解析（兼容 `incus remote list`）
-3. 引入更细粒度测试（module update + client mock）
+1. 为每个模块补齐写操作（create/update/delete）表单与确认流
+2. 增加 Project/Remote 动态切换
+3. 引入事件订阅（monitor）与实时刷新
+4. 增加 module update 行为测试与 client mock 测试
