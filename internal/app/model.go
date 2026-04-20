@@ -67,10 +67,20 @@ type sectionActionDoneMsg struct {
 	err     error
 }
 
+type contextSwitchedMsg struct {
+	svc     client.InstanceService
+	remote  string
+	project string
+	err     error
+}
+
 type Model struct {
 	instances     instances.Model
 	svc           client.InstanceService
+	newService    func(remote, project string) (client.InstanceService, error)
 	timeout       time.Duration
+	remote        string
+	project       string
 	active        int
 	table         table.Model
 	status        map[Section]string
@@ -86,9 +96,19 @@ type Model struct {
 	actionSection Section
 	actionType    string
 	actionTarget  string
+	switching     bool
+	switchKind    string
+	switchInput   textinput.Model
 }
 
-func New(svc client.InstanceService, timeout time.Duration, instancesModel instances.Model) Model {
+func New(
+	svc client.InstanceService,
+	timeout time.Duration,
+	instancesModel instances.Model,
+	factory func(remote, project string) (client.InstanceService, error),
+	remote string,
+	project string,
+) Model {
 	t := table.New(table.WithFocused(true), table.WithHeight(16))
 	t.SetStyles(defaultTableStyles())
 
@@ -98,13 +118,16 @@ func New(svc client.InstanceService, timeout time.Duration, instancesModel insta
 	}
 
 	return Model{
-		instances: instancesModel,
-		svc:       svc,
-		timeout:   timeout,
-		table:     t,
-		status:    status,
-		cache:     make(map[Section]tablePayload, len(orderedSections)),
-		loaded:    make(map[Section]bool, len(orderedSections)),
+		instances:  instancesModel,
+		svc:        svc,
+		newService: factory,
+		timeout:    timeout,
+		remote:     remote,
+		project:    project,
+		table:      t,
+		status:     status,
+		cache:      make(map[Section]tablePayload, len(orderedSections)),
+		loaded:     make(map[Section]bool, len(orderedSections)),
 	}
 }
 
@@ -117,6 +140,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.table.SetWidth(max(40, msg.Width-24))
 	case tea.KeyMsg:
+		if m.switching {
+			return m.handleSwitchInput(msg)
+		}
 		if m.formOpen {
 			return m.handleForm(msg)
 		}
@@ -136,6 +162,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "O":
+			m.startSwitchInput("remote")
+			return m, nil
+		case "P":
+			m.startSwitchInput("project")
+			return m, nil
 		case "left", "h":
 			if m.active > 0 {
 				m.active--
@@ -185,6 +217,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status[msg.section] = fmt.Sprintf("%s completed: %s", titleWord(msg.action), msg.target)
 		return m, m.refreshSectionCmd(msg.section)
+	case contextSwitchedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status[m.currentSection()] = fmt.Sprintf("Switch failed: %v", msg.err)
+			return m, nil
+		}
+		m.svc = msg.svc
+		m.remote = msg.remote
+		m.project = msg.project
+		m.instances = instances.New(msg.svc, m.timeout)
+		m.cache = make(map[Section]tablePayload, len(orderedSections))
+		m.loaded = make(map[Section]bool, len(orderedSections))
+		m.status[m.currentSection()] = fmt.Sprintf("Switched to remote=%q project=%q", renderContext(msg.remote), renderContext(msg.project))
+		return m, m.refreshSectionCmd(m.currentSection())
 	}
 
 	if m.currentSection() == SectionInstances {
@@ -229,9 +275,12 @@ func (m Model) renderSidebar() string {
 		}
 		items = append(items, label)
 	}
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 1).Render("[h/l|←/→|tab] 切换")
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 1).Render("[h/l|←/→|tab] 切换 [O] remote [P] project")
+	ctxLine := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1).Render(
+		fmt.Sprintf("R:%s P:%s", renderContext(m.remote), renderContext(m.project)),
+	)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, append([]string{header, ""}, append(items, "", footer)...)...)
+	content := lipgloss.JoinVertical(lipgloss.Left, append([]string{header, ""}, append(items, "", ctxLine, footer)...)...)
 	return lipgloss.NewStyle().Width(20).BorderStyle(lipgloss.NormalBorder()).BorderRight(true).Render(content)
 }
 
@@ -243,6 +292,10 @@ func (m Model) renderBody() string {
 	title := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Incus TUI - %s", m.currentSection()))
 	help := "[j/k or ↑/↓] navigate [r] refresh [c/u/d] write [q] quit"
 	body := m.table.View()
+	if m.switching {
+		body = m.renderSwitchInput()
+		help = "[enter] apply [esc] cancel"
+	}
 	if m.formOpen {
 		body = m.renderForm()
 		help = "[tab] next [enter] submit [esc] cancel"
@@ -256,6 +309,54 @@ func (m Model) renderBody() string {
 	status := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status[m.currentSection()])
 	content := fmt.Sprintf("%s\n\n%s\n\n%s\n%s", title, body, help, status)
 	return lipgloss.NewStyle().Padding(0, 1).Render(content)
+}
+
+func (m *Model) startSwitchInput(kind string) {
+	m.switching = true
+	m.switchKind = kind
+	value := m.remote
+	if kind == "project" {
+		value = m.project
+	}
+	m.switchInput = newTextInput("Value: ", fmt.Sprintf("new %s", kind), value)
+	m.switchInput.Focus()
+	m.status[m.currentSection()] = fmt.Sprintf("Switch %s then press enter", kind)
+}
+
+func (m Model) handleSwitchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.switching = false
+		m.status[m.currentSection()] = "Context switch cancelled"
+		return m, nil
+	case "enter":
+		m.switching = false
+		m.loading = true
+		value := strings.TrimSpace(m.switchInput.Value())
+		return m, m.switchContextCmd(m.switchKind, value)
+	}
+	var cmd tea.Cmd
+	m.switchInput, cmd = m.switchInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) renderSwitchInput() string {
+	title := fmt.Sprintf("Switch %s context", titleWord(m.switchKind))
+	return fmt.Sprintf("%s\n\n%s%s", lipgloss.NewStyle().Bold(true).Render(title), m.switchInput.Prompt, m.switchInput.View())
+}
+
+func (m Model) switchContextCmd(kind, value string) tea.Cmd {
+	return func() tea.Msg {
+		nextRemote, nextProject := m.remote, m.project
+		if kind == "remote" {
+			nextRemote = value
+		} else {
+			nextProject = value
+		}
+
+		svc, err := m.newService(nextRemote, nextProject)
+		return contextSwitchedMsg{svc: svc, remote: nextRemote, project: nextProject, err: err}
+	}
 }
 
 func (m *Model) refreshSectionCmd(section Section) tea.Cmd {
@@ -560,6 +661,13 @@ func titleWord(value string) string {
 		return ""
 	}
 	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func renderContext(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "default"
+	}
+	return value
 }
 
 func validateSectionForm(section Section, action, name, value string) map[int]string {

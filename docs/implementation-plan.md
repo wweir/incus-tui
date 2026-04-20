@@ -29,6 +29,6 @@
 ## Next Steps
 
 1. [x] 完善各模块写操作参数校验与字段级错误提示（首版）
-2. 增加 Project/Remote 动态切换
+2. [x] 增加 Project/Remote 动态切换（首版）
 3. 引入事件订阅（monitor）与实时刷新
 4. 增加 module update 行为测试与 client mock 测试

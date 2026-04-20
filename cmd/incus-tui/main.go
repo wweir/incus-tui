@@ -40,7 +40,10 @@ func main() {
 	}
 
 	instanceModule := instances.New(incusSvc, cfg.CommandTimeout)
-	application := app.New(incusSvc, cfg.CommandTimeout, instanceModule)
+	factory := func(remote, project string) (client.InstanceService, error) {
+		return client.NewIncusClient(remote, project)
+	}
+	application := app.New(incusSvc, cfg.CommandTimeout, instanceModule, factory, cfg.Remote, cfg.Project)
 
 	program := tea.NewProgram(application, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
