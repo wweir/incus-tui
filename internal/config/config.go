@@ -27,7 +27,7 @@ func (c Config) Validate() error {
 func Default() Config {
 	return Config{
 		Remote:         "",
-		Project:        "default",
+		Project:        "",
 		CommandTimeout: 15 * time.Second,
 	}
 }

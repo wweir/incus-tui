@@ -1,22 +1,30 @@
 package client
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestSanitizeOutput(t *testing.T) {
-	short := "  hello\n"
-	if got := sanitizeOutput(short); got != "hello" {
-		t.Fatalf("sanitizeOutput short = %q", got)
+func TestNormalizeEndpoint(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "https endpoint", input: "https://127.0.0.1:8443", want: "https://127.0.0.1:8443"},
+		{name: "http endpoint", input: "http://localhost:8443", want: "http://localhost:8443"},
+		{name: "empty", input: "", wantErr: true},
+		{name: "remote name not supported", input: "local", wantErr: true},
+		{name: "bad url", input: "https://:8443", wantErr: true},
 	}
 
-	long := strings.Repeat("a", 2000)
-	got := sanitizeOutput(long)
-	if len(got) != 1027 {
-		t.Fatalf("sanitizeOutput long len = %d", len(got))
-	}
-	if !strings.HasSuffix(got, "...") {
-		t.Fatalf("sanitizeOutput long suffix = %q", got[len(got)-3:])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeEndpoint(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeEndpoint() err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeEndpoint()=%q want=%q", got, tt.want)
+			}
+		})
 	}
 }

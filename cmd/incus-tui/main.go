@@ -33,7 +33,12 @@ func main() {
 
 	slog.Info("starting incus-tui", "version", version, "build_date", buildDate)
 
-	incusSvc := client.NewIncusCLI(cfg.Remote, cfg.Project)
+	incusSvc, err := client.NewIncusClient(cfg.Remote, cfg.Project)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init incus client failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	instanceModule := instances.New(incusSvc, cfg.CommandTimeout)
 	application := app.New(instanceModule)
 

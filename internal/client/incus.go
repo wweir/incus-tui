@@ -2,17 +2,19 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
+	"net/url"
 	"strings"
+
+	incus "github.com/lxc/incus/v6/client"
+	"github.com/lxc/incus/v6/shared/api"
 )
 
 type Instance struct {
-	Name   string   `json:"name"`
-	Status string   `json:"status"`
-	Type   string   `json:"type"`
-	IP4    []string `json:"ip4"`
+	Name   string
+	Status string
+	Type   string
+	IP4    []string
 }
 
 type InstanceService interface {
@@ -22,105 +24,110 @@ type InstanceService interface {
 	DeleteInstance(ctx context.Context, name string) error
 }
 
-type IncusCLI struct {
-	remote  string
-	project string
+type IncusClient struct {
+	server incus.InstanceServer
 }
 
-func NewIncusCLI(remote, project string) *IncusCLI {
-	return &IncusCLI{remote: remote, project: project}
+func NewIncusClient(remote, project string) (*IncusClient, error) {
+	server, err := connectServer(remote)
+	if err != nil {
+		return nil, err
+	}
+	if project != "" {
+		server = server.UseProject(project)
+	}
+	return &IncusClient{server: server}, nil
 }
 
-func (c *IncusCLI) ListInstances(ctx context.Context) ([]Instance, error) {
-	args := c.prefixArgs("list", "--format", "json")
-	out, err := c.run(ctx, args...)
+func connectServer(remote string) (incus.InstanceServer, error) {
+	if strings.TrimSpace(remote) == "" {
+		server, err := incus.ConnectIncusUnix("", nil)
+		if err != nil {
+			return nil, fmt.Errorf("connect default incus unix socket: %w", err)
+		}
+		return server, nil
+	}
+
+	endpoint, err := normalizeEndpoint(remote)
 	if err != nil {
 		return nil, err
 	}
 
-	var payload []struct {
-		Name   string `json:"name"`
-		Status string `json:"status"`
-		Type   string `json:"type"`
-		State  struct {
-			Network map[string]struct {
-				Addresses []struct {
-					Address string `json:"address"`
-					Family  string `json:"family"`
-				} `json:"addresses"`
-			} `json:"network"`
-		} `json:"state"`
+	server, err := incus.ConnectIncus(endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect remote endpoint %q: %w", endpoint, err)
+	}
+	return server, nil
+}
+
+func normalizeEndpoint(remote string) (string, error) {
+	trimmed := strings.TrimSpace(remote)
+	if trimmed == "" {
+		return "", fmt.Errorf("remote endpoint is empty")
+	}
+	if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
+		parsed, err := url.ParseRequestURI(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("invalid remote endpoint %q: %w", trimmed, err)
+		}
+		if parsed.Hostname() == "" {
+			return "", fmt.Errorf("invalid remote endpoint %q: missing host", trimmed)
+		}
+		return trimmed, nil
+	}
+	return "", fmt.Errorf("unsupported remote %q: only URL endpoints are supported, e.g. https://127.0.0.1:8443", trimmed)
+}
+
+func (c *IncusClient) ListInstances(ctx context.Context) ([]Instance, error) {
+	all, err := c.server.GetInstancesFullWithFilter(api.InstanceTypeAny, []string{})
+	if err != nil {
+		return nil, fmt.Errorf("list instances: %w", err)
 	}
 
-	if err := json.Unmarshal(out, &payload); err != nil {
-		return nil, fmt.Errorf("decode list output: %w", err)
-	}
-
-	instances := make([]Instance, 0, len(payload))
-	for _, item := range payload {
-		ins := Instance{Name: item.Name, Status: item.Status, Type: item.Type}
-		for _, nic := range item.State.Network {
-			for _, addr := range nic.Addresses {
-				if strings.EqualFold(addr.Family, "inet") {
-					ins.IP4 = append(ins.IP4, addr.Address)
+	instances := make([]Instance, 0, len(all))
+	for _, item := range all {
+		ins := Instance{Name: item.Name, Status: item.Status, Type: string(item.Type)}
+		for _, network := range item.State.Network {
+			for _, address := range network.Addresses {
+				if strings.EqualFold(address.Family, "inet") {
+					ins.IP4 = append(ins.IP4, address.Address)
 				}
 			}
 		}
 		instances = append(instances, ins)
 	}
-
 	return instances, nil
 }
 
-func (c *IncusCLI) StartInstance(ctx context.Context, name string) error {
-	_, err := c.run(ctx, c.prefixArgs("start", name)...)
+func (c *IncusClient) StartInstance(ctx context.Context, name string) error {
+	op, err := c.server.UpdateInstanceState(name, api.InstanceStatePut{Action: "start", Timeout: -1}, "")
 	if err != nil {
 		return fmt.Errorf("start instance %q: %w", name, err)
 	}
+	if err := op.WaitContext(ctx); err != nil {
+		return fmt.Errorf("wait start instance %q: %w", name, err)
+	}
 	return nil
 }
 
-func (c *IncusCLI) StopInstance(ctx context.Context, name string) error {
-	_, err := c.run(ctx, c.prefixArgs("stop", name)...)
+func (c *IncusClient) StopInstance(ctx context.Context, name string) error {
+	op, err := c.server.UpdateInstanceState(name, api.InstanceStatePut{Action: "stop", Force: true, Timeout: -1}, "")
 	if err != nil {
 		return fmt.Errorf("stop instance %q: %w", name, err)
 	}
+	if err := op.WaitContext(ctx); err != nil {
+		return fmt.Errorf("wait stop instance %q: %w", name, err)
+	}
 	return nil
 }
 
-func (c *IncusCLI) DeleteInstance(ctx context.Context, name string) error {
-	_, err := c.run(ctx, c.prefixArgs("delete", name, "--force")...)
+func (c *IncusClient) DeleteInstance(ctx context.Context, name string) error {
+	op, err := c.server.DeleteInstance(name)
 	if err != nil {
 		return fmt.Errorf("delete instance %q: %w", name, err)
 	}
+	if err := op.WaitContext(ctx); err != nil {
+		return fmt.Errorf("wait delete instance %q: %w", name, err)
+	}
 	return nil
-}
-
-func (c *IncusCLI) prefixArgs(args ...string) []string {
-	base := make([]string, 0, len(args)+4)
-	if c.remote != "" {
-		base = append(base, "--remote", c.remote)
-	}
-	if c.project != "" {
-		base = append(base, "--project", c.project)
-	}
-	base = append(base, args...)
-	return base
-}
-
-func (c *IncusCLI) run(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "incus", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("incus %s failed: %w, output=%s", strings.Join(args, " "), err, sanitizeOutput(string(out)))
-	}
-	return out, nil
-}
-
-func sanitizeOutput(in string) string {
-	trimmed := strings.TrimSpace(in)
-	if len(trimmed) <= 1024 {
-		return trimmed
-	}
-	return trimmed[:1024] + "..."
 }
