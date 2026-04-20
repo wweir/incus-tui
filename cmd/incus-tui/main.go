@@ -21,7 +21,7 @@ var (
 
 func main() {
 	cfg := config.Default()
-	flag.StringVar(&cfg.Remote, "remote", cfg.Remote, "Incus remote endpoint URL (http/https)")
+	flag.StringVar(&cfg.Remote, "remote", cfg.Remote, "Incus remote name or endpoint URL")
 	flag.StringVar(&cfg.Project, "project", cfg.Project, "Incus project name")
 	flag.DurationVar(&cfg.CommandTimeout, "timeout", cfg.CommandTimeout, "Incus command timeout")
 	flag.Parse()

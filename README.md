@@ -12,7 +12,7 @@
 - 其余模块（Images/Storage/Networks/Profiles/Projects/Cluster/Operations/Warnings）
   - 列表浏览
   - 刷新
-- 支持 `--remote`（URL 端点）/`--project`/`--timeout`
+- 支持 `--remote`（remote 名称或 URL 端点）/`--project`/`--timeout`
 
 ## 快捷键
 
@@ -28,7 +28,7 @@
 ## 连接说明
 
 - 不加参数：连接默认本地 `incusd`。
-- `--remote` 当前仅支持显式 URL（示例：`https://127.0.0.1:8443`）。
+- `--remote` 支持 Incus remote 名称（例如 `local`）或显式 URL（例如 `https://127.0.0.1:8443`）。
 - `--project` 留空时使用服务端默认项目。
 
 ## 开发

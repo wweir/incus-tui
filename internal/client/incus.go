@@ -2,13 +2,16 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
+	"github.com/lxc/incus/v6/shared/cliconfig"
 )
 
 type Instance struct {
@@ -110,24 +113,64 @@ func NewIncusClient(remote, project string) (*IncusClient, error) {
 }
 
 func connectServer(remote string) (incus.InstanceServer, error) {
-	if strings.TrimSpace(remote) == "" {
-		server, err := incus.ConnectIncusUnix("", nil)
+	trimmed := strings.TrimSpace(remote)
+
+	if trimmed == "" {
+		cfg, err := loadCLIConfig()
+		if err != nil {
+			return nil, err
+		}
+
+		server, err := cfg.GetInstanceServer(cfg.DefaultRemote)
+		if err == nil {
+			return server, nil
+		}
+
+		server, err = incus.ConnectIncusUnix("", nil)
 		if err != nil {
 			return nil, fmt.Errorf("connect default incus unix socket: %w", err)
 		}
 		return server, nil
 	}
 
-	endpoint, err := normalizeEndpoint(remote)
+	if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
+		endpoint, err := normalizeEndpoint(trimmed)
+		if err != nil {
+			return nil, err
+		}
+
+		server, err := incus.ConnectIncus(endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("connect remote endpoint %q: %w", endpoint, err)
+		}
+		return server, nil
+	}
+
+	cfg, err := loadCLIConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	server, err := incus.ConnectIncus(endpoint, nil)
+	server, err := cfg.GetInstanceServer(trimmed)
 	if err != nil {
-		return nil, fmt.Errorf("connect remote endpoint %q: %w", endpoint, err)
+		return nil, fmt.Errorf("connect remote %q from incus config: %w", trimmed, err)
 	}
 	return server, nil
+}
+
+func loadCLIConfig() (*cliconfig.Config, error) {
+	baseDir := os.Getenv("INCUS_CONF")
+	baseDir = strings.TrimSpace(baseDir)
+	cfg := cliconfig.NewConfig(baseDir, true)
+	cfgPath := cfg.ConfigPath("config.yml")
+	loaded, err := cliconfig.LoadConfig(cfgPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("load incus config %q: %w", cfgPath, err)
+	}
+	return loaded, nil
 }
 
 func normalizeEndpoint(remote string) (string, error) {
@@ -145,7 +188,7 @@ func normalizeEndpoint(remote string) (string, error) {
 		}
 		return trimmed, nil
 	}
-	return "", fmt.Errorf("unsupported remote %q: only URL endpoints are supported, e.g. https://127.0.0.1:8443", trimmed)
+	return "", fmt.Errorf("unsupported remote endpoint %q: only URL endpoints are supported, e.g. https://127.0.0.1:8443", trimmed)
 }
 
 func (c *IncusClient) ListInstances(ctx context.Context) ([]Instance, error) {
