@@ -81,6 +81,7 @@ type Model struct {
 	formTitle     string
 	formIndex     int
 	form          []textinput.Model
+	formErrors    map[int]string
 	confirming    bool
 	actionSection Section
 	actionType    string
@@ -356,11 +357,20 @@ func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		setFocusedInput(m.form, m.formIndex)
 		return m, nil
 	case "enter":
+		section := m.currentSection()
+		target := m.formValue(0)
+		value := m.formValue(1)
+		if errs := validateSectionForm(section, m.actionType, target, value); len(errs) > 0 {
+			m.formErrors = errs
+			m.status[section] = "Please fix invalid fields"
+			return m, nil
+		}
+		m.formErrors = nil
 		m.formOpen = false
 		m.confirming = true
-		m.actionSection = m.currentSection()
-		m.actionTarget = m.formValue(0)
-		m.status[m.currentSection()] = fmt.Sprintf("Confirm %s %s? (y/n)", m.actionType, m.actionTarget)
+		m.actionSection = section
+		m.actionTarget = target
+		m.status[section] = fmt.Sprintf("Confirm %s %s? (y/n)", m.actionType, m.actionTarget)
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -387,6 +397,7 @@ func (m *Model) initSectionForm(action string) {
 		m.form = m.form[:1]
 	}
 	m.formOpen = true
+	m.formErrors = nil
 	m.formIndex = 0
 	setFocusedInput(m.form, 0)
 	m.status[m.currentSection()] = "Fill form and press enter"
@@ -418,6 +429,10 @@ func (m Model) renderForm() string {
 	for i, input := range m.form {
 		b.WriteString(input.Prompt)
 		b.WriteString(input.View())
+		if errText, ok := m.formErrors[i]; ok {
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  ! " + errText))
+		}
 		if i < len(m.form)-1 {
 			b.WriteString("\n")
 		}
@@ -545,4 +560,37 @@ func titleWord(value string) string {
 		return ""
 	}
 	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func validateSectionForm(section Section, action, name, value string) map[int]string {
+	errs := map[int]string{}
+	if strings.TrimSpace(name) == "" {
+		errs[0] = "name is required"
+	}
+	if action == "delete" {
+		if len(errs) == 0 {
+			return nil
+		}
+		return errs
+	}
+
+	switch section {
+	case SectionStorage:
+		if action == "create" && strings.TrimSpace(value) == "" {
+			errs[1] = "driver is required"
+		}
+	case SectionNetworks:
+		if action == "create" && strings.TrimSpace(value) == "" {
+			errs[1] = "network type is required"
+		}
+	case SectionImages, SectionOperations, SectionWarnings:
+		if action != "delete" {
+			errs[1] = "only delete is supported for this module"
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
 }

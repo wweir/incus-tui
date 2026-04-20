@@ -38,6 +38,7 @@ type Model struct {
 	formInputs     []textinput.Model
 	formIndex      int
 	formTitle      string
+	formErrors     map[int]string
 }
 
 type instancesLoadedMsg struct {
@@ -169,9 +170,16 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		setFocusedInput(m.formInputs, m.formIndex)
 		return m, nil
 	case "enter":
+		values := collectFormValues(m.formInputs)
+		if errs := validateInstanceForm(m.pendingAction, values); len(errs) > 0 {
+			m.formErrors = errs
+			m.status = "Please fix invalid fields"
+			return m, nil
+		}
+		m.formErrors = nil
 		m.formOpen = false
 		m.confirming = true
-		m.selectedTarget = m.formInputs[0].Value()
+		m.selectedTarget = values["name"]
 		m.status = fmt.Sprintf("Confirm %s on %s? (y/n)", strings.ToLower(actionName(m.pendingAction)), m.selectedTarget)
 		return m, nil
 	}
@@ -200,6 +208,10 @@ func (m Model) renderForm() string {
 	for i, input := range m.formInputs {
 		b.WriteString(input.Prompt)
 		b.WriteString(input.View())
+		if errText, ok := m.formErrors[i]; ok {
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  ! " + errText))
+		}
 		if i < len(m.formInputs)-1 {
 			b.WriteString("\n")
 		}
@@ -212,6 +224,7 @@ func (m *Model) initCreateForm() {
 	m.formInputs = []textinput.Model{newInput("Name: ", "instance name", ""), newInput("Image: ", "image alias/fingerprint", "images:alpine/edge"), newInput("Type: ", "container or virtual-machine", "container")}
 	m.focusFormInput(0)
 	m.formOpen = true
+	m.formErrors = nil
 	m.pendingAction = ActionCreate
 	m.status = "Fill create form then press enter"
 }
@@ -221,6 +234,7 @@ func (m *Model) initUpdateForm(target string) {
 	m.formInputs = []textinput.Model{newInput("Name: ", "instance name", target), newInput("Config key: ", "e.g. limits.cpu", ""), newInput("Config value: ", "new value", "")}
 	m.focusFormInput(1)
 	m.formOpen = true
+	m.formErrors = nil
 	m.pendingAction = ActionUpdate
 	m.status = "Fill update form then press enter"
 }
@@ -244,14 +258,47 @@ func (m Model) submitPendingActionCmd() tea.Cmd {
 	target := m.selectedTarget
 	var payload map[string]string
 	if action == ActionCreate || action == ActionUpdate {
-		payload = map[string]string{}
-		for _, input := range m.formInputs {
-			key := strings.TrimSpace(strings.TrimSuffix(input.Prompt, ": "))
-			payload[strings.ToLower(strings.ReplaceAll(key, " ", "_"))] = strings.TrimSpace(input.Value())
-		}
+		payload = collectFormValues(m.formInputs)
 	}
 	m.pendingAction = ActionNone
 	return m.actionCmd(action, target, payload)
+}
+
+func collectFormValues(inputs []textinput.Model) map[string]string {
+	values := map[string]string{}
+	for _, input := range inputs {
+		key := strings.TrimSpace(strings.TrimSuffix(input.Prompt, ": "))
+		values[strings.ToLower(strings.ReplaceAll(key, " ", "_"))] = strings.TrimSpace(input.Value())
+	}
+	return values
+}
+
+func validateInstanceForm(action Action, values map[string]string) map[int]string {
+	errs := map[int]string{}
+	name := values["name"]
+	if name == "" {
+		errs[0] = "name is required"
+	}
+
+	switch action {
+	case ActionCreate:
+		if values["image"] == "" {
+			errs[1] = "image is required"
+		}
+		typ := values["type"]
+		if typ != "container" && typ != "virtual-machine" {
+			errs[2] = "type must be container or virtual-machine"
+		}
+	case ActionUpdate:
+		if values["config_key"] == "" {
+			errs[1] = "config key is required"
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
 }
 
 func (m Model) actionCmd(action Action, target string, payload map[string]string) tea.Cmd {
