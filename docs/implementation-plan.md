@@ -1,5 +1,11 @@
 # Incus TUI Implementation Plan
 
+## Document Links
+
+- Architecture: `../ARCHITECTURE.md`
+- Design: `./design.md`
+- Docs Index: `./README.md`
+
 ## Phase 1 (Started: 2026-04-20)
 
 ### Scope
