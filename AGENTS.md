@@ -27,7 +27,7 @@ Use Simplified Chinese to answer my questions.
 
 1. 优先用接口定义依赖边界，便于测试和替换
 2. 优先简单直接的实现；抽象必须服务于复用、测试或隔离复杂度
-3. 适当使用泛型减少重复代码，但不为泛型而泛型
+3. 适当使用泛型减少重复代码，避免大量重复的范式代码
 4. 实现优雅关闭：通过 `context` 传播取消信号，并用 `defer` 完成清理
 
 ## Code Structure
