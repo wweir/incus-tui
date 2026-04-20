@@ -52,6 +52,7 @@
 
 ## Related Documents
 
-- `Incus TUI Design.md`
+- `docs/design.md`
 - `docs/implementation-plan.md`
+- `docs/README.md`
 - `README.md`

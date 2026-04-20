@@ -31,6 +31,13 @@
 - `--remote` 支持 Incus remote 名称（例如 `local`）或显式 URL（例如 `https://127.0.0.1:8443`）。
 - `--project` 留空时使用服务端默认项目。
 
+## 文档导航
+
+- 架构文档：`ARCHITECTURE.md`
+- 设计蓝图：`docs/design.md`
+- 实施计划：`docs/implementation-plan.md`
+- 文档索引：`docs/README.md`
+
 ## 开发
 
 ```bash
