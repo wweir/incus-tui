@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -62,4 +64,21 @@ func TestRunWithContext(t *testing.T) {
 			t.Fatalf("runWithContext() got=%d, want=7", got)
 		}
 	})
+}
+
+func TestLoadCLIConfigWithMissingFile(t *testing.T) {
+	confDir := filepath.Join(t.TempDir(), "incus")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	t.Setenv("INCUS_CONF", confDir)
+
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		t.Fatalf("loadCLIConfig() err=%v", err)
+	}
+	if cfg == nil {
+		t.Fatalf("loadCLIConfig() cfg is nil")
+	}
 }
