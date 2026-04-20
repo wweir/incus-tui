@@ -28,7 +28,7 @@
 
 ## Next Steps
 
-1. 为每个模块补齐写操作（create/update/delete）表单与确认流
-2. 增加 Project/Remote 动态切换
-3. 引入事件订阅（monitor）与实时刷新
+1. [x] 完善各模块写操作参数校验与字段级错误提示（首版）
+2. [x] 增加 Project/Remote 动态切换（首版）
+3. [x] 引入事件订阅（monitor）与实时刷新（首版）
 4. 增加 module update 行为测试与 client mock 测试

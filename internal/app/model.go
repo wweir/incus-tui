@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -58,20 +61,60 @@ type sectionLoadedMsg struct {
 	err     error
 }
 
-type Model struct {
-	instances instances.Model
-	svc       client.InstanceService
-	timeout   time.Duration
-	active    int
-	table     table.Model
-	status    map[Section]string
-	cache     map[Section]tablePayload
-	loading   bool
-	loaded    map[Section]bool
-	viewportW int
+type sectionActionDoneMsg struct {
+	section Section
+	action  string
+	target  string
+	err     error
 }
 
-func New(svc client.InstanceService, timeout time.Duration, instancesModel instances.Model) Model {
+type contextSwitchedMsg struct {
+	svc     client.InstanceService
+	remote  string
+	project string
+	err     error
+}
+
+type eventReceivedMsg struct {
+	eventType string
+	err       error
+}
+
+type Model struct {
+	instances     instances.Model
+	svc           client.InstanceService
+	newService    func(remote, project string) (client.InstanceService, error)
+	timeout       time.Duration
+	remote        string
+	project       string
+	active        int
+	table         table.Model
+	status        map[Section]string
+	cache         map[Section]tablePayload
+	loading       bool
+	loaded        map[Section]bool
+	formOpen      bool
+	formTitle     string
+	formIndex     int
+	form          []textinput.Model
+	formErrors    map[int]string
+	confirming    bool
+	actionSection Section
+	actionType    string
+	actionTarget  string
+	switching     bool
+	switchKind    string
+	switchInput   textinput.Model
+}
+
+func New(
+	svc client.InstanceService,
+	timeout time.Duration,
+	instancesModel instances.Model,
+	factory func(remote, project string) (client.InstanceService, error),
+	remote string,
+	project string,
+) Model {
 	t := table.New(table.WithFocused(true), table.WithHeight(16))
 	t.SetStyles(defaultTableStyles())
 
@@ -81,29 +124,56 @@ func New(svc client.InstanceService, timeout time.Duration, instancesModel insta
 	}
 
 	return Model{
-		instances: instancesModel,
-		svc:       svc,
-		timeout:   timeout,
-		table:     t,
-		status:    status,
-		cache:     make(map[Section]tablePayload, len(orderedSections)),
-		loaded:    make(map[Section]bool, len(orderedSections)),
+		instances:  instancesModel,
+		svc:        svc,
+		newService: factory,
+		timeout:    timeout,
+		remote:     remote,
+		project:    project,
+		table:      t,
+		status:     status,
+		cache:      make(map[Section]tablePayload, len(orderedSections)),
+		loaded:     make(map[Section]bool, len(orderedSections)),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.instances.Init()
+	return tea.Batch(m.instances.Init(), m.waitEventCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewportW = msg.Width
 		m.table.SetWidth(max(40, msg.Width-24))
 	case tea.KeyMsg:
+		if m.switching {
+			return m.handleSwitchInput(msg)
+		}
+		if m.formOpen {
+			return m.handleForm(msg)
+		}
+		if m.confirming {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirming = false
+				m.loading = true
+				m.status[m.actionSection] = fmt.Sprintf("%s %s...", titleWord(m.actionType), m.actionTarget)
+				return m, m.sectionActionCmd(m.actionSection, m.actionType, m.actionTarget, m.formValue(1))
+			case "n", "N", "esc":
+				m.confirming = false
+				m.status[m.currentSection()] = "Action cancelled"
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "O":
+			m.startSwitchInput("remote")
+			return m, nil
+		case "P":
+			m.startSwitchInput("project")
+			return m, nil
 		case "left", "h":
 			if m.active > 0 {
 				m.active--
@@ -124,6 +194,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			return m, m.refreshSectionCmd(m.currentSection())
+		case "c", "u", "d":
+			if m.currentSection() == SectionInstances {
+				break
+			}
+			m.initSectionForm(msg.String())
+			return m, nil
 		}
 	case sectionLoadedMsg:
 		m.loading = false
@@ -139,6 +215,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.table.SetRows(msg.payload.rows)
 		}
 		return m, nil
+	case sectionActionDoneMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status[msg.section] = fmt.Sprintf("%s failed on %s: %v", titleWord(msg.action), msg.target, msg.err)
+			return m, nil
+		}
+		m.status[msg.section] = fmt.Sprintf("%s completed: %s", titleWord(msg.action), msg.target)
+		return m, m.refreshSectionCmd(msg.section)
+	case contextSwitchedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status[m.currentSection()] = fmt.Sprintf("Switch failed: %v", msg.err)
+			return m, nil
+		}
+		m.svc = msg.svc
+		m.remote = msg.remote
+		m.project = msg.project
+		m.instances = instances.New(msg.svc, m.timeout)
+		m.cache = make(map[Section]tablePayload, len(orderedSections))
+		m.loaded = make(map[Section]bool, len(orderedSections))
+		m.status[m.currentSection()] = fmt.Sprintf("Switched to remote=%q project=%q", renderContext(msg.remote), renderContext(msg.project))
+		return m, tea.Batch(m.refreshSectionCmd(m.currentSection()), m.waitEventCmd())
+	case eventReceivedMsg:
+		if msg.err != nil {
+			if !errors.Is(msg.err, context.Canceled) {
+				m.status[m.currentSection()] = fmt.Sprintf("Monitor error: %v", msg.err)
+			}
+			return m, m.waitEventCmd()
+		}
+		if m.loading || m.formOpen || m.confirming || m.switching {
+			return m, m.waitEventCmd()
+		}
+		m.status[m.currentSection()] = fmt.Sprintf("Monitor event: %s", msg.eventType)
+		return m, tea.Batch(m.refreshSectionCmd(m.currentSection()), m.waitEventCmd())
 	}
 
 	if m.currentSection() == SectionInstances {
@@ -183,9 +293,12 @@ func (m Model) renderSidebar() string {
 		}
 		items = append(items, label)
 	}
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 1).Render("[h/l|←/→|tab] 切换")
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 1).Render("[h/l|←/→|tab] 切换 [O] remote [P] project")
+	ctxLine := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1).Render(
+		fmt.Sprintf("R:%s P:%s", renderContext(m.remote), renderContext(m.project)),
+	)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, append([]string{header, ""}, append(items, "", footer)...)...)
+	content := lipgloss.JoinVertical(lipgloss.Left, append([]string{header, ""}, append(items, "", ctxLine, footer)...)...)
 	return lipgloss.NewStyle().Width(20).BorderStyle(lipgloss.NormalBorder()).BorderRight(true).Render(content)
 }
 
@@ -195,13 +308,82 @@ func (m Model) renderBody() string {
 	}
 
 	title := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Incus TUI - %s", m.currentSection()))
-	help := "[j/k or ↑/↓] navigate [r] refresh [q] quit"
+	help := "[j/k or ↑/↓] navigate [r] refresh [c/u/d] write [q] quit"
+	body := m.table.View()
+	if m.switching {
+		body = m.renderSwitchInput()
+		help = "[enter] apply [esc] cancel"
+	}
+	if m.formOpen {
+		body = m.renderForm()
+		help = "[tab] next [enter] submit [esc] cancel"
+	}
+	if m.confirming {
+		help = "Confirm action: [y] yes [n] no"
+	}
 	if m.loading {
 		help = "Loading..."
 	}
 	status := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status[m.currentSection()])
-	content := fmt.Sprintf("%s\n\n%s\n\n%s\n%s", title, m.table.View(), help, status)
+	content := fmt.Sprintf("%s\n\n%s\n\n%s\n%s", title, body, help, status)
 	return lipgloss.NewStyle().Padding(0, 1).Render(content)
+}
+
+func (m *Model) startSwitchInput(kind string) {
+	m.switching = true
+	m.switchKind = kind
+	value := m.remote
+	if kind == "project" {
+		value = m.project
+	}
+	m.switchInput = newTextInput("Value: ", fmt.Sprintf("new %s", kind), value)
+	m.switchInput.Focus()
+	m.status[m.currentSection()] = fmt.Sprintf("Switch %s then press enter", kind)
+}
+
+func (m Model) handleSwitchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.switching = false
+		m.status[m.currentSection()] = "Context switch cancelled"
+		return m, nil
+	case "enter":
+		m.switching = false
+		m.loading = true
+		value := strings.TrimSpace(m.switchInput.Value())
+		return m, m.switchContextCmd(m.switchKind, value)
+	}
+	var cmd tea.Cmd
+	m.switchInput, cmd = m.switchInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) renderSwitchInput() string {
+	title := fmt.Sprintf("Switch %s context", titleWord(m.switchKind))
+	return fmt.Sprintf("%s\n\n%s%s", lipgloss.NewStyle().Bold(true).Render(title), m.switchInput.Prompt, m.switchInput.View())
+}
+
+func (m Model) switchContextCmd(kind, value string) tea.Cmd {
+	return func() tea.Msg {
+		nextRemote, nextProject := m.remote, m.project
+		if kind == "remote" {
+			nextRemote = value
+		} else {
+			nextProject = value
+		}
+
+		svc, err := m.newService(nextRemote, nextProject)
+		return contextSwitchedMsg{svc: svc, remote: nextRemote, project: nextProject, err: err}
+	}
+}
+
+func (m Model) waitEventCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		eventType, err := m.svc.WaitForEvent(ctx)
+		return eventReceivedMsg{eventType: eventType, err: err}
+	}
 }
 
 func (m *Model) refreshSectionCmd(section Section) tea.Cmd {
@@ -292,6 +474,115 @@ func (m Model) loadTablePayload(ctx context.Context, section Section) (tablePayl
 	}
 }
 
+func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.formOpen = false
+		m.status[m.currentSection()] = "Form cancelled"
+		return m, nil
+	case "tab", "shift+tab", "up", "down":
+		m.formIndex = nextInputIndex(msg.String(), m.formIndex, len(m.form))
+		setFocusedInput(m.form, m.formIndex)
+		return m, nil
+	case "enter":
+		section := m.currentSection()
+		target := m.formValue(0)
+		value := m.formValue(1)
+		if errs := validateSectionForm(section, m.actionType, target, value); len(errs) > 0 {
+			m.formErrors = errs
+			m.status[section] = "Please fix invalid fields"
+			return m, nil
+		}
+		m.formErrors = nil
+		m.formOpen = false
+		m.confirming = true
+		m.actionSection = section
+		m.actionTarget = target
+		m.status[section] = fmt.Sprintf("Confirm %s %s? (y/n)", m.actionType, m.actionTarget)
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.form[m.formIndex], cmd = m.form[m.formIndex].Update(msg)
+	return m, cmd
+}
+
+func (m *Model) initSectionForm(action string) {
+	m.actionType = mapActionType(action)
+	target := m.currentRowValue(0)
+	secondPrompt := "Value: "
+	secondPlaceholder := "description/type"
+	switch m.currentSection() {
+	case SectionImages, SectionOperations, SectionWarnings:
+		secondPrompt = "Reserved: "
+		secondPlaceholder = "leave empty"
+	}
+	m.formTitle = fmt.Sprintf("%s %s", titleWord(m.actionType), m.currentSection())
+	m.form = []textinput.Model{
+		newTextInput("Name: ", "resource name", target),
+		newTextInput(secondPrompt, secondPlaceholder, ""),
+	}
+	if m.actionType == "delete" {
+		m.form = m.form[:1]
+	}
+	m.formOpen = true
+	m.formErrors = nil
+	m.formIndex = 0
+	setFocusedInput(m.form, 0)
+	m.status[m.currentSection()] = "Fill form and press enter"
+}
+
+func (m Model) sectionActionCmd(section Section, action, target, value string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+		defer cancel()
+		var err error
+		switch action {
+		case "create":
+			err = m.svc.CreateResource(ctx, string(section), target, value)
+		case "update":
+			err = m.svc.UpdateResource(ctx, string(section), target, value)
+		case "delete":
+			err = m.svc.DeleteResource(ctx, string(section), target)
+		default:
+			err = fmt.Errorf("unsupported action %s", action)
+		}
+		return sectionActionDoneMsg{section: section, action: action, target: target, err: err}
+	}
+}
+
+func (m Model) renderForm() string {
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(m.formTitle))
+	b.WriteString("\n\n")
+	for i, input := range m.form {
+		b.WriteString(input.Prompt)
+		b.WriteString(input.View())
+		if errText, ok := m.formErrors[i]; ok {
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  ! " + errText))
+		}
+		if i < len(m.form)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) currentRowValue(index int) string {
+	row := m.table.SelectedRow()
+	if len(row) <= index {
+		return ""
+	}
+	return row[index]
+}
+
+func (m Model) formValue(index int) string {
+	if len(m.form) <= index {
+		return ""
+	}
+	return strings.TrimSpace(m.form[index].Value())
+}
+
 func buildSectionPayload[T any](
 	ctx context.Context,
 	loader func(context.Context) ([]T, error),
@@ -349,4 +640,92 @@ func humanSize(size int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%ciB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+func newTextInput(prompt, placeholder, value string) textinput.Model {
+	in := textinput.New()
+	in.Prompt = prompt
+	in.Placeholder = placeholder
+	in.SetValue(value)
+	in.Width = 48
+	in.CharLimit = 256
+	return in
+}
+
+func mapActionType(key string) string {
+	switch key {
+	case "c":
+		return "create"
+	case "u":
+		return "update"
+	case "d":
+		return "delete"
+	default:
+		return ""
+	}
+}
+
+func nextInputIndex(key string, current, total int) int {
+	delta := 1
+	if key == "shift+tab" || key == "up" {
+		delta = -1
+	}
+	return (current + delta + total) % total
+}
+
+func setFocusedInput(inputs []textinput.Model, index int) {
+	for i := range inputs {
+		if i == index {
+			inputs[i].Focus()
+			continue
+		}
+		inputs[i].Blur()
+	}
+}
+
+func titleWord(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func renderContext(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "default"
+	}
+	return value
+}
+
+func validateSectionForm(section Section, action, name, value string) map[int]string {
+	errs := map[int]string{}
+	if strings.TrimSpace(name) == "" {
+		errs[0] = "name is required"
+	}
+	if action == "delete" {
+		if len(errs) == 0 {
+			return nil
+		}
+		return errs
+	}
+
+	switch section {
+	case SectionStorage:
+		if action == "create" && strings.TrimSpace(value) == "" {
+			errs[1] = "driver is required"
+		}
+	case SectionNetworks:
+		if action == "create" && strings.TrimSpace(value) == "" {
+			errs[1] = "network type is required"
+		}
+	case SectionImages, SectionOperations, SectionWarnings:
+		if action != "delete" {
+			errs[1] = "only delete is supported for this module"
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
 }
