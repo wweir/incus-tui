@@ -77,7 +77,6 @@ type Model struct {
 	cache         map[Section]tablePayload
 	loading       bool
 	loaded        map[Section]bool
-	viewportW     int
 	formOpen      bool
 	formTitle     string
 	formIndex     int
@@ -115,7 +114,6 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewportW = msg.Width
 		m.table.SetWidth(max(40, msg.Width-24))
 	case tea.KeyMsg:
 		if m.formOpen {
@@ -126,7 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				m.confirming = false
 				m.loading = true
-				m.status[m.actionSection] = fmt.Sprintf("%s %s...", strings.Title(m.actionType), m.actionTarget)
+				m.status[m.actionSection] = fmt.Sprintf("%s %s...", titleWord(m.actionType), m.actionTarget)
 				return m, m.sectionActionCmd(m.actionSection, m.actionType, m.actionTarget, m.formValue(1))
 			case "n", "N", "esc":
 				m.confirming = false
@@ -181,10 +179,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sectionActionDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.status[msg.section] = fmt.Sprintf("%s failed on %s: %v", strings.Title(msg.action), msg.target, msg.err)
+			m.status[msg.section] = fmt.Sprintf("%s failed on %s: %v", titleWord(msg.action), msg.target, msg.err)
 			return m, nil
 		}
-		m.status[msg.section] = fmt.Sprintf("%s completed: %s", strings.Title(msg.action), msg.target)
+		m.status[msg.section] = fmt.Sprintf("%s completed: %s", titleWord(msg.action), msg.target)
 		return m, m.refreshSectionCmd(msg.section)
 	}
 
@@ -354,18 +352,8 @@ func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status[m.currentSection()] = "Form cancelled"
 		return m, nil
 	case "tab", "shift+tab", "up", "down":
-		delta := 1
-		if msg.String() == "shift+tab" || msg.String() == "up" {
-			delta = -1
-		}
-		m.formIndex = (m.formIndex + delta + len(m.form)) % len(m.form)
-		for i := range m.form {
-			if i == m.formIndex {
-				m.form[i].Focus()
-			} else {
-				m.form[i].Blur()
-			}
-		}
+		m.formIndex = nextInputIndex(msg.String(), m.formIndex, len(m.form))
+		setFocusedInput(m.form, m.formIndex)
 		return m, nil
 	case "enter":
 		m.formOpen = false
@@ -381,7 +369,7 @@ func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) initSectionForm(action string) {
-	m.actionType = map[string]string{"c": "create", "u": "update", "d": "delete"}[action]
+	m.actionType = mapActionType(action)
 	target := m.currentRowValue(0)
 	secondPrompt := "Value: "
 	secondPlaceholder := "description/type"
@@ -390,7 +378,7 @@ func (m *Model) initSectionForm(action string) {
 		secondPrompt = "Reserved: "
 		secondPlaceholder = "leave empty"
 	}
-	m.formTitle = fmt.Sprintf("%s %s", strings.Title(m.actionType), m.currentSection())
+	m.formTitle = fmt.Sprintf("%s %s", titleWord(m.actionType), m.currentSection())
 	m.form = []textinput.Model{
 		newTextInput("Name: ", "resource name", target),
 		newTextInput(secondPrompt, secondPlaceholder, ""),
@@ -400,13 +388,7 @@ func (m *Model) initSectionForm(action string) {
 	}
 	m.formOpen = true
 	m.formIndex = 0
-	for i := range m.form {
-		if i == 0 {
-			m.form[i].Focus()
-		} else {
-			m.form[i].Blur()
-		}
-	}
+	setFocusedInput(m.form, 0)
 	m.status[m.currentSection()] = "Fill form and press enter"
 }
 
@@ -525,4 +507,42 @@ func newTextInput(prompt, placeholder, value string) textinput.Model {
 	in.Width = 48
 	in.CharLimit = 256
 	return in
+}
+
+func mapActionType(key string) string {
+	switch key {
+	case "c":
+		return "create"
+	case "u":
+		return "update"
+	case "d":
+		return "delete"
+	default:
+		return ""
+	}
+}
+
+func nextInputIndex(key string, current, total int) int {
+	delta := 1
+	if key == "shift+tab" || key == "up" {
+		delta = -1
+	}
+	return (current + delta + total) % total
+}
+
+func setFocusedInput(inputs []textinput.Model, index int) {
+	for i := range inputs {
+		if i == index {
+			inputs[i].Focus()
+			continue
+		}
+		inputs[i].Blur()
+	}
+}
+
+func titleWord(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }

@@ -34,7 +34,6 @@ type Model struct {
 	confirming     bool
 	pendingAction  Action
 	selectedTarget string
-	width          int
 	formOpen       bool
 	formInputs     []textinput.Model
 	formIndex      int
@@ -64,7 +63,6 @@ func (m Model) Init() tea.Cmd { return m.refreshCmd() }
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
 		m.table.SetWidth(msg.Width - 2)
 	case tea.KeyMsg:
 		if m.confirming {
@@ -167,23 +165,12 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.status = "Form cancelled"
 		return m, nil
 	case "tab", "shift+tab", "up", "down":
-		delta := 1
-		if msg.String() == "shift+tab" || msg.String() == "up" {
-			delta = -1
-		}
-		m.formIndex = (m.formIndex + delta + len(m.formInputs)) % len(m.formInputs)
-		for i := range m.formInputs {
-			if i == m.formIndex {
-				m.formInputs[i].Focus()
-			} else {
-				m.formInputs[i].Blur()
-			}
-		}
+		m.formIndex = nextInputIndex(msg.String(), m.formIndex, len(m.formInputs))
+		setFocusedInput(m.formInputs, m.formIndex)
 		return m, nil
 	case "enter":
 		m.formOpen = false
 		m.confirming = true
-		m.pendingAction = m.formAction()
 		m.selectedTarget = m.formInputs[0].Value()
 		m.status = fmt.Sprintf("Confirm %s on %s? (y/n)", strings.ToLower(actionName(m.pendingAction)), m.selectedTarget)
 		return m, nil
@@ -240,16 +227,8 @@ func (m *Model) initUpdateForm(target string) {
 
 func (m *Model) focusFormInput(index int) {
 	m.formIndex = index
-	for i := range m.formInputs {
-		if i == index {
-			m.formInputs[i].Focus()
-		} else {
-			m.formInputs[i].Blur()
-		}
-	}
+	setFocusedInput(m.formInputs, index)
 }
-
-func (m Model) formAction() Action { return m.pendingAction }
 
 func (m Model) refreshCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -329,6 +308,24 @@ func newInput(prompt, placeholder, value string) textinput.Model {
 	in.CharLimit = 256
 	in.Width = 48
 	return in
+}
+
+func nextInputIndex(key string, current, total int) int {
+	delta := 1
+	if key == "shift+tab" || key == "up" {
+		delta = -1
+	}
+	return (current + delta + total) % total
+}
+
+func setFocusedInput(inputs []textinput.Model, index int) {
+	for i := range inputs {
+		if i == index {
+			inputs[i].Focus()
+			continue
+		}
+		inputs[i].Blur()
+	}
 }
 
 func defaultTableStyles() table.Styles {
