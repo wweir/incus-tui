@@ -46,6 +46,12 @@ type tablePayload struct {
 	status  string
 }
 
+type sectionTableSpec[T any] struct {
+	columns      []table.Column
+	loadedStatus string
+	toRow        func(item T) table.Row
+}
+
 type sectionLoadedMsg struct {
 	section Section
 	payload tablePayload
@@ -218,88 +224,94 @@ func (m *Model) refreshSectionCmd(section Section) tea.Cmd {
 func (m Model) loadTablePayload(ctx context.Context, section Section) (tablePayload, error) {
 	switch section {
 	case SectionImages:
-		items, err := m.svc.ListImages(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{shortFingerprint(item.Fingerprint), item.Type, item.Architecture, humanSize(item.Size), item.UploadedAt.Format(time.RFC3339)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Fingerprint", Width: 18}, {Title: "Type", Width: 12}, {Title: "Arch", Width: 10}, {Title: "Size", Width: 12}, {Title: "Uploaded", Width: 22}}, rows: rows, status: fmt.Sprintf("Loaded %d images", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListImages, sectionTableSpec[client.Image]{
+			columns:      []table.Column{{Title: "Fingerprint", Width: 18}, {Title: "Type", Width: 12}, {Title: "Arch", Width: 10}, {Title: "Size", Width: 12}, {Title: "Uploaded", Width: 22}},
+			loadedStatus: "Loaded %d images",
+			toRow: func(item client.Image) table.Row {
+				return table.Row{shortFingerprint(item.Fingerprint), item.Type, item.Architecture, humanSize(item.Size), item.UploadedAt.Format(time.RFC3339)}
+			},
+		})
 	case SectionStorage:
-		items, err := m.svc.ListStoragePools(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{item.Name, item.Driver, item.Status, strconv.Itoa(item.UsedBy)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Name", Width: 24}, {Title: "Driver", Width: 12}, {Title: "Status", Width: 12}, {Title: "UsedBy", Width: 10}}, rows: rows, status: fmt.Sprintf("Loaded %d storage pools", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListStoragePools, sectionTableSpec[client.StoragePool]{
+			columns:      []table.Column{{Title: "Name", Width: 24}, {Title: "Driver", Width: 12}, {Title: "Status", Width: 12}, {Title: "UsedBy", Width: 10}},
+			loadedStatus: "Loaded %d storage pools",
+			toRow: func(item client.StoragePool) table.Row {
+				return table.Row{item.Name, item.Driver, item.Status, strconv.Itoa(item.UsedBy)}
+			},
+		})
 	case SectionNetworks:
-		items, err := m.svc.ListNetworks(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{item.Name, item.Type, strconv.FormatBool(item.Managed), item.Status, strconv.Itoa(item.UsedBy)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Name", Width: 24}, {Title: "Type", Width: 12}, {Title: "Managed", Width: 10}, {Title: "Status", Width: 12}, {Title: "UsedBy", Width: 10}}, rows: rows, status: fmt.Sprintf("Loaded %d networks", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListNetworks, sectionTableSpec[client.Network]{
+			columns:      []table.Column{{Title: "Name", Width: 24}, {Title: "Type", Width: 12}, {Title: "Managed", Width: 10}, {Title: "Status", Width: 12}, {Title: "UsedBy", Width: 10}},
+			loadedStatus: "Loaded %d networks",
+			toRow: func(item client.Network) table.Row {
+				return table.Row{item.Name, item.Type, strconv.FormatBool(item.Managed), item.Status, strconv.Itoa(item.UsedBy)}
+			},
+		})
 	case SectionProfiles:
-		items, err := m.svc.ListProfiles(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{item.Name, item.Project, strconv.Itoa(item.UsedBy)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Name", Width: 24}, {Title: "Project", Width: 18}, {Title: "UsedBy", Width: 10}}, rows: rows, status: fmt.Sprintf("Loaded %d profiles", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListProfiles, sectionTableSpec[client.Profile]{
+			columns:      []table.Column{{Title: "Name", Width: 24}, {Title: "Project", Width: 18}, {Title: "UsedBy", Width: 10}},
+			loadedStatus: "Loaded %d profiles",
+			toRow: func(item client.Profile) table.Row {
+				return table.Row{item.Name, item.Project, strconv.Itoa(item.UsedBy)}
+			},
+		})
 	case SectionProjects:
-		items, err := m.svc.ListProjects(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{item.Name, truncateText(item.Description, 48), strconv.Itoa(item.UsedBy)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Name", Width: 24}, {Title: "Description", Width: 48}, {Title: "UsedBy", Width: 10}}, rows: rows, status: fmt.Sprintf("Loaded %d projects", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListProjects, sectionTableSpec[client.Project]{
+			columns:      []table.Column{{Title: "Name", Width: 24}, {Title: "Description", Width: 48}, {Title: "UsedBy", Width: 10}},
+			loadedStatus: "Loaded %d projects",
+			toRow: func(item client.Project) table.Row {
+				return table.Row{item.Name, truncateText(item.Description, 48), strconv.Itoa(item.UsedBy)}
+			},
+		})
 	case SectionCluster:
-		items, err := m.svc.ListClusterMembers(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{item.Name, item.Status, truncateText(item.Message, 40), truncateText(item.URL, 40)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "Name", Width: 22}, {Title: "Status", Width: 12}, {Title: "Message", Width: 42}, {Title: "URL", Width: 42}}, rows: rows, status: fmt.Sprintf("Loaded %d cluster members", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListClusterMembers, sectionTableSpec[client.ClusterMember]{
+			columns:      []table.Column{{Title: "Name", Width: 22}, {Title: "Status", Width: 12}, {Title: "Message", Width: 42}, {Title: "URL", Width: 42}},
+			loadedStatus: "Loaded %d cluster members",
+			toRow: func(item client.ClusterMember) table.Row {
+				return table.Row{item.Name, item.Status, truncateText(item.Message, 40), truncateText(item.URL, 40)}
+			},
+		})
 	case SectionOperations:
-		items, err := m.svc.ListOperations(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{shortFingerprint(item.ID), item.Class, item.Status, truncateText(item.Description, 36), item.CreatedAt.Format(time.RFC3339)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "ID", Width: 18}, {Title: "Class", Width: 12}, {Title: "Status", Width: 12}, {Title: "Description", Width: 38}, {Title: "Created", Width: 22}}, rows: rows, status: fmt.Sprintf("Loaded %d operations", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListOperations, sectionTableSpec[client.Operation]{
+			columns:      []table.Column{{Title: "ID", Width: 18}, {Title: "Class", Width: 12}, {Title: "Status", Width: 12}, {Title: "Description", Width: 38}, {Title: "Created", Width: 22}},
+			loadedStatus: "Loaded %d operations",
+			toRow: func(item client.Operation) table.Row {
+				return table.Row{shortFingerprint(item.ID), item.Class, item.Status, truncateText(item.Description, 36), item.CreatedAt.Format(time.RFC3339)}
+			},
+		})
 	case SectionWarnings:
-		items, err := m.svc.ListWarnings(ctx)
-		if err != nil {
-			return tablePayload{}, err
-		}
-		rows := make([]table.Row, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, table.Row{shortFingerprint(item.UUID), item.Severity, item.Type, item.Project, strconv.Itoa(item.Count), item.LastSeenAt.Format(time.RFC3339), truncateText(item.Message, 24)})
-		}
-		return tablePayload{columns: []table.Column{{Title: "UUID", Width: 14}, {Title: "Severity", Width: 10}, {Title: "Type", Width: 18}, {Title: "Project", Width: 14}, {Title: "Count", Width: 8}, {Title: "LastSeen", Width: 22}, {Title: "Message", Width: 26}}, rows: rows, status: fmt.Sprintf("Loaded %d warnings", len(rows))}, nil
+		return buildSectionPayload(ctx, m.svc.ListWarnings, sectionTableSpec[client.Warning]{
+			columns:      []table.Column{{Title: "UUID", Width: 14}, {Title: "Severity", Width: 10}, {Title: "Type", Width: 18}, {Title: "Project", Width: 14}, {Title: "Count", Width: 8}, {Title: "LastSeen", Width: 22}, {Title: "Message", Width: 26}},
+			loadedStatus: "Loaded %d warnings",
+			toRow: func(item client.Warning) table.Row {
+				return table.Row{shortFingerprint(item.UUID), item.Severity, item.Type, item.Project, strconv.Itoa(item.Count), item.LastSeenAt.Format(time.RFC3339), truncateText(item.Message, 24)}
+			},
+		})
 	default:
 		return tablePayload{}, fmt.Errorf("unsupported section %s", section)
 	}
+}
+
+func buildSectionPayload[T any](
+	ctx context.Context,
+	loader func(context.Context) ([]T, error),
+	spec sectionTableSpec[T],
+) (tablePayload, error) {
+	items, err := loader(ctx)
+	if err != nil {
+		return tablePayload{}, err
+	}
+
+	rows := make([]table.Row, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, spec.toRow(item))
+	}
+
+	return tablePayload{
+		columns: spec.columns,
+		rows:    rows,
+		status:  fmt.Sprintf(spec.loadedStatus, len(rows)),
+	}, nil
 }
 
 func defaultTableStyles() table.Styles {

@@ -260,113 +260,97 @@ func (c *IncusClient) DeleteInstance(ctx context.Context, name string) error {
 }
 
 func (c *IncusClient) ListImages(ctx context.Context) ([]Image, error) {
-	images, err := runWithContext(ctx, c.server.GetImages)
-	if err != nil {
-		return nil, fmt.Errorf("list images: %w", err)
-	}
-
-	items := make([]Image, 0, len(images))
-	for _, img := range images {
-		items = append(items, Image{
-			Fingerprint:  img.Fingerprint,
-			Type:         img.Type,
-			Size:         img.Size,
-			Architecture: img.Architecture,
-			UploadedAt:   img.UploadedAt,
-		})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list images",
+		c.server.GetImages,
+		func(img api.Image) Image {
+			return Image{
+				Fingerprint:  img.Fingerprint,
+				Type:         img.Type,
+				Size:         img.Size,
+				Architecture: img.Architecture,
+				UploadedAt:   img.UploadedAt,
+			}
+		},
+	)
 }
 
 func (c *IncusClient) ListStoragePools(ctx context.Context) ([]StoragePool, error) {
-	pools, err := runWithContext(ctx, c.server.GetStoragePools)
-	if err != nil {
-		return nil, fmt.Errorf("list storage pools: %w", err)
-	}
-
-	items := make([]StoragePool, 0, len(pools))
-	for _, pool := range pools {
-		items = append(items, StoragePool{Name: pool.Name, Driver: pool.Driver, Status: pool.Status, UsedBy: len(pool.UsedBy)})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list storage pools",
+		c.server.GetStoragePools,
+		func(pool api.StoragePool) StoragePool {
+			return StoragePool{Name: pool.Name, Driver: pool.Driver, Status: pool.Status, UsedBy: len(pool.UsedBy)}
+		},
+	)
 }
 
 func (c *IncusClient) ListNetworks(ctx context.Context) ([]Network, error) {
-	networks, err := runWithContext(ctx, c.server.GetNetworks)
-	if err != nil {
-		return nil, fmt.Errorf("list networks: %w", err)
-	}
-
-	items := make([]Network, 0, len(networks))
-	for _, network := range networks {
-		items = append(items, Network{Name: network.Name, Type: network.Type, Managed: network.Managed, Status: network.Status, UsedBy: len(network.UsedBy)})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list networks",
+		c.server.GetNetworks,
+		func(network api.Network) Network {
+			return Network{Name: network.Name, Type: network.Type, Managed: network.Managed, Status: network.Status, UsedBy: len(network.UsedBy)}
+		},
+	)
 }
 
 func (c *IncusClient) ListProfiles(ctx context.Context) ([]Profile, error) {
-	profiles, err := runWithContext(ctx, c.server.GetProfiles)
-	if err != nil {
-		return nil, fmt.Errorf("list profiles: %w", err)
-	}
-
-	items := make([]Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		items = append(items, Profile{Name: profile.Name, Project: profile.Project, UsedBy: len(profile.UsedBy)})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list profiles",
+		c.server.GetProfiles,
+		func(profile api.Profile) Profile {
+			return Profile{Name: profile.Name, Project: profile.Project, UsedBy: len(profile.UsedBy)}
+		},
+	)
 }
 
 func (c *IncusClient) ListProjects(ctx context.Context) ([]Project, error) {
-	projects, err := runWithContext(ctx, c.server.GetProjects)
-	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
-	}
-
-	items := make([]Project, 0, len(projects))
-	for _, project := range projects {
-		items = append(items, Project{Name: project.Name, Description: project.Description, UsedBy: len(project.UsedBy)})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list projects",
+		c.server.GetProjects,
+		func(project api.Project) Project {
+			return Project{Name: project.Name, Description: project.Description, UsedBy: len(project.UsedBy)}
+		},
+	)
 }
 
 func (c *IncusClient) ListClusterMembers(ctx context.Context) ([]ClusterMember, error) {
-	members, err := runWithContext(ctx, c.server.GetClusterMembers)
-	if err != nil {
-		return nil, fmt.Errorf("list cluster members: %w", err)
-	}
-
-	items := make([]ClusterMember, 0, len(members))
-	for _, member := range members {
-		items = append(items, ClusterMember{Name: member.ServerName, URL: member.URL, Status: member.Status, Message: member.Message})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list cluster members",
+		c.server.GetClusterMembers,
+		func(member api.ClusterMember) ClusterMember {
+			return ClusterMember{Name: member.ServerName, URL: member.URL, Status: member.Status, Message: member.Message}
+		},
+	)
 }
 
 func (c *IncusClient) ListOperations(ctx context.Context) ([]Operation, error) {
-	operations, err := runWithContext(ctx, c.server.GetOperations)
-	if err != nil {
-		return nil, fmt.Errorf("list operations: %w", err)
-	}
-
-	items := make([]Operation, 0, len(operations))
-	for _, operation := range operations {
-		items = append(items, Operation{ID: operation.ID, Class: operation.Class, Status: operation.Status, Description: operation.Description, CreatedAt: operation.CreatedAt})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list operations",
+		c.server.GetOperations,
+		func(operation api.Operation) Operation {
+			return Operation{ID: operation.ID, Class: operation.Class, Status: operation.Status, Description: operation.Description, CreatedAt: operation.CreatedAt}
+		},
+	)
 }
 
 func (c *IncusClient) ListWarnings(ctx context.Context) ([]Warning, error) {
-	warnings, err := runWithContext(ctx, c.server.GetWarnings)
-	if err != nil {
-		return nil, fmt.Errorf("list warnings: %w", err)
-	}
-
-	items := make([]Warning, 0, len(warnings))
-	for _, warning := range warnings {
-		items = append(items, Warning{UUID: warning.UUID, Severity: warning.Severity, Type: warning.Type, Location: warning.Location, Project: warning.Project, Count: warning.Count, Message: warning.LastMessage, LastSeenAt: warning.LastSeenAt})
-	}
-	return items, nil
+	return listAndMapWithContext(
+		ctx,
+		"list warnings",
+		c.server.GetWarnings,
+		func(warning api.Warning) Warning {
+			return Warning{UUID: warning.UUID, Severity: warning.Severity, Type: warning.Type, Location: warning.Location, Project: warning.Project, Count: warning.Count, Message: warning.LastMessage, LastSeenAt: warning.LastSeenAt}
+		},
+	)
 }
 
 func runWithContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
@@ -393,4 +377,22 @@ func runWithContext[T any](ctx context.Context, fn func() (T, error)) (T, error)
 	case res := <-done:
 		return res.value, res.err
 	}
+}
+
+func listAndMapWithContext[From any, To any](
+	ctx context.Context,
+	opName string,
+	listFn func() ([]From, error),
+	mapFn func(From) To,
+) ([]To, error) {
+	items, err := runWithContext(ctx, listFn)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", opName, err)
+	}
+
+	out := make([]To, 0, len(items))
+	for _, item := range items {
+		out = append(out, mapFn(item))
+	}
+	return out, nil
 }
