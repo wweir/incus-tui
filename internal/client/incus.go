@@ -149,7 +149,9 @@ func normalizeEndpoint(remote string) (string, error) {
 }
 
 func (c *IncusClient) ListInstances(ctx context.Context) ([]Instance, error) {
-	all, err := c.server.GetInstancesFullWithFilter(api.InstanceTypeAny, []string{})
+	all, err := runWithContext(ctx, func() ([]api.InstanceFull, error) {
+		return c.server.GetInstancesFullWithFilter(api.InstanceTypeAny, []string{})
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list instances: %w", err)
 	}
@@ -170,6 +172,10 @@ func (c *IncusClient) ListInstances(ctx context.Context) ([]Instance, error) {
 }
 
 func (c *IncusClient) StartInstance(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("start instance %q: %w", name, err)
+	}
+
 	op, err := c.server.UpdateInstanceState(name, api.InstanceStatePut{Action: "start", Timeout: -1}, "")
 	if err != nil {
 		return fmt.Errorf("start instance %q: %w", name, err)
@@ -181,6 +187,10 @@ func (c *IncusClient) StartInstance(ctx context.Context, name string) error {
 }
 
 func (c *IncusClient) StopInstance(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("stop instance %q: %w", name, err)
+	}
+
 	op, err := c.server.UpdateInstanceState(name, api.InstanceStatePut{Action: "stop", Force: true, Timeout: -1}, "")
 	if err != nil {
 		return fmt.Errorf("stop instance %q: %w", name, err)
@@ -192,6 +202,10 @@ func (c *IncusClient) StopInstance(ctx context.Context, name string) error {
 }
 
 func (c *IncusClient) DeleteInstance(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete instance %q: %w", name, err)
+	}
+
 	op, err := c.server.DeleteInstance(name)
 	if err != nil {
 		return fmt.Errorf("delete instance %q: %w", name, err)
@@ -203,7 +217,7 @@ func (c *IncusClient) DeleteInstance(ctx context.Context, name string) error {
 }
 
 func (c *IncusClient) ListImages(ctx context.Context) ([]Image, error) {
-	images, err := c.server.GetImages()
+	images, err := runWithContext(ctx, c.server.GetImages)
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
@@ -222,7 +236,7 @@ func (c *IncusClient) ListImages(ctx context.Context) ([]Image, error) {
 }
 
 func (c *IncusClient) ListStoragePools(ctx context.Context) ([]StoragePool, error) {
-	pools, err := c.server.GetStoragePools()
+	pools, err := runWithContext(ctx, c.server.GetStoragePools)
 	if err != nil {
 		return nil, fmt.Errorf("list storage pools: %w", err)
 	}
@@ -235,7 +249,7 @@ func (c *IncusClient) ListStoragePools(ctx context.Context) ([]StoragePool, erro
 }
 
 func (c *IncusClient) ListNetworks(ctx context.Context) ([]Network, error) {
-	networks, err := c.server.GetNetworks()
+	networks, err := runWithContext(ctx, c.server.GetNetworks)
 	if err != nil {
 		return nil, fmt.Errorf("list networks: %w", err)
 	}
@@ -248,7 +262,7 @@ func (c *IncusClient) ListNetworks(ctx context.Context) ([]Network, error) {
 }
 
 func (c *IncusClient) ListProfiles(ctx context.Context) ([]Profile, error) {
-	profiles, err := c.server.GetProfiles()
+	profiles, err := runWithContext(ctx, c.server.GetProfiles)
 	if err != nil {
 		return nil, fmt.Errorf("list profiles: %w", err)
 	}
@@ -261,7 +275,7 @@ func (c *IncusClient) ListProfiles(ctx context.Context) ([]Profile, error) {
 }
 
 func (c *IncusClient) ListProjects(ctx context.Context) ([]Project, error) {
-	projects, err := c.server.GetProjects()
+	projects, err := runWithContext(ctx, c.server.GetProjects)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -274,7 +288,7 @@ func (c *IncusClient) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 func (c *IncusClient) ListClusterMembers(ctx context.Context) ([]ClusterMember, error) {
-	members, err := c.server.GetClusterMembers()
+	members, err := runWithContext(ctx, c.server.GetClusterMembers)
 	if err != nil {
 		return nil, fmt.Errorf("list cluster members: %w", err)
 	}
@@ -287,7 +301,7 @@ func (c *IncusClient) ListClusterMembers(ctx context.Context) ([]ClusterMember, 
 }
 
 func (c *IncusClient) ListOperations(ctx context.Context) ([]Operation, error) {
-	operations, err := c.server.GetOperations()
+	operations, err := runWithContext(ctx, c.server.GetOperations)
 	if err != nil {
 		return nil, fmt.Errorf("list operations: %w", err)
 	}
@@ -300,7 +314,7 @@ func (c *IncusClient) ListOperations(ctx context.Context) ([]Operation, error) {
 }
 
 func (c *IncusClient) ListWarnings(ctx context.Context) ([]Warning, error) {
-	warnings, err := c.server.GetWarnings()
+	warnings, err := runWithContext(ctx, c.server.GetWarnings)
 	if err != nil {
 		return nil, fmt.Errorf("list warnings: %w", err)
 	}
@@ -310,4 +324,30 @@ func (c *IncusClient) ListWarnings(ctx context.Context) ([]Warning, error) {
 		items = append(items, Warning{UUID: warning.UUID, Severity: warning.Severity, Type: warning.Type, Location: warning.Location, Project: warning.Project, Count: warning.Count, Message: warning.LastMessage, LastSeenAt: warning.LastSeenAt})
 	}
 	return items, nil
+}
+
+func runWithContext[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	type result struct {
+		value T
+		err   error
+	}
+
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
+
+	done := make(chan result, 1)
+	go func() {
+		value, err := fn()
+		done <- result{value: value, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case res := <-done:
+		return res.value, res.err
+	}
 }

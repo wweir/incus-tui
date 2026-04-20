@@ -86,7 +86,7 @@ func New(svc client.InstanceService, timeout time.Duration, instancesModel insta
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.instances.Init(), m.refreshSectionCmd(m.currentSection()))
+	return m.instances.Init()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

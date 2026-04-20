@@ -1,6 +1,11 @@
 package client
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestNormalizeEndpoint(t *testing.T) {
 	tests := []struct {
@@ -27,4 +32,34 @@ func TestNormalizeEndpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunWithContext(t *testing.T) {
+	t.Run("context timeout", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+
+		_, err := runWithContext(ctx, func() (string, error) {
+			time.Sleep(100 * time.Millisecond)
+			return "late", nil
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("runWithContext() err=%v, want deadline exceeded", err)
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		got, err := runWithContext(ctx, func() (int, error) {
+			return 7, nil
+		})
+		if err != nil {
+			t.Fatalf("runWithContext() err=%v", err)
+		}
+		if got != 7 {
+			t.Fatalf("runWithContext() got=%d, want=7", got)
+		}
+	})
 }
