@@ -12,7 +12,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/example/incus-tui/internal/client"
+	"github.com/example/incus-tui/internal/tui/detailview"
+	"github.com/example/incus-tui/internal/tui/overlay"
+	"github.com/example/incus-tui/internal/tui/tableinput"
 )
+
+const tableFirstRowY = 4
 
 type Action int
 
@@ -39,6 +44,9 @@ type Model struct {
 	formIndex      int
 	formTitle      string
 	formErrors     map[int]string
+	detailView     detailview.Model
+	windowWidth    int
+	windowHeight   int
 }
 
 type instancesLoadedMsg struct {
@@ -52,20 +60,72 @@ type instanceActionDoneMsg struct {
 	err    error
 }
 
+type instanceDetailLoadedMsg struct {
+	target string
+	detail client.ResourceDetail
+	err    error
+}
+
 func New(svc client.InstanceService, timeout time.Duration) Model {
 	columns := []table.Column{{Title: "Name", Width: 24}, {Title: "Status", Width: 14}, {Title: "Type", Width: 10}, {Title: "IPv4", Width: 30}}
 	t := table.New(table.WithColumns(columns), table.WithFocused(true), table.WithHeight(14))
 	t.SetStyles(defaultTableStyles())
-	return Model{table: t, svc: svc, timeout: timeout, status: "Loading instances..."}
+	model := Model{table: t, svc: svc, timeout: timeout, status: "Loading instances...", detailView: detailview.New()}
+	model.resizeDetailView(80, 24)
+	return model
 }
 
 func (m Model) Init() tea.Cmd { return m.refreshCmd() }
 
+func (m *Model) Focus() {
+	m.table.Focus()
+}
+
+func (m *Model) Blur() {
+	m.table.Blur()
+}
+
+func (m Model) Focused() bool {
+	return m.table.Focused()
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.windowWidth = msg.Width
+		m.windowHeight = msg.Height
 		m.table.SetWidth(msg.Width - 2)
+		m.resizeDetailView(msg.Width-12, msg.Height-12)
+	case tea.MouseMsg:
+		if m.showingDetail() {
+			var cmd tea.Cmd
+			m.detailView, cmd = m.detailView.Update(msg)
+			return m, cmd
+		}
+		if !m.busy && !m.formOpen && !m.confirming {
+			m.table = tableinput.HandleMouse(m.table, msg, tableFirstRowY)
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.showingDetail() {
+			switch msg.String() {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "esc", "enter":
+				m.detailView.Clear()
+				m.status = "Back to list"
+				return m, nil
+			case "r":
+				m.detailView.Clear()
+				m.busy = true
+				m.status = "Refreshing instances..."
+				return m, m.refreshCmd()
+			}
+			var cmd tea.Cmd
+			m.detailView, cmd = m.detailView.Update(msg)
+			return m, cmd
+		}
+
 		if m.confirming {
 			switch msg.String() {
 			case "y", "Y":
@@ -95,6 +155,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.busy = true
 			m.status = "Refreshing instances..."
 			return m, m.refreshCmd()
+		case "enter":
+			target := m.currentName()
+			if target == "" {
+				return m, nil
+			}
+			m.busy = true
+			m.status = fmt.Sprintf("Loading detail for %s...", target)
+			return m, m.detailCmd(target)
 		case "c":
 			m.initCreateForm()
 			return m, nil
@@ -152,6 +220,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("Action completed: %s", msg.target)
 		return m, m.refreshCmd()
+	case instanceDetailLoadedMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Detail failed on %s: %v", msg.target, msg.err)
+			return m, nil
+		}
+		m.detailView.SetDetail(msg.detail)
+		m.status = fmt.Sprintf("Viewing detail: %s", msg.target)
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -189,31 +266,64 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	header := lipgloss.NewStyle().Bold(true).Render("Incus TUI - Instances")
-	if m.formOpen {
-		return fmt.Sprintf("%s\n\n%s\n\n%s\n%s", header, m.renderForm(), "[tab] next [enter] submit [esc] cancel", m.status)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Render("Incus TUI - Instances")
+	meta := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(m.renderMeta())
+	body := renderPanel("", m.table.View(), lipgloss.Color("238"))
+	help := "[j/k or ↑/↓] navigate [enter] detail [r] refresh [c] create [u] update [s] start [x] stop [d] delete [q] quit"
+	base := fmt.Sprintf("%s\n%s\n\n%s\n\n%s\n%s", header, meta, body, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(help), renderStatusBar(m.status))
+
+	switch {
+	case m.formOpen:
+		return overlay.RenderScreen(
+			m.windowWidth,
+			m.windowHeight,
+			m.formTitle,
+			meta,
+			m.renderForm(),
+			"[tab] next [enter] submit [esc] cancel",
+			renderStatusBar(m.status),
+			lipgloss.Color("62"),
+		)
+	case m.showingDetail():
+		return overlay.RenderScreen(
+			m.windowWidth,
+			m.windowHeight,
+			m.detailView.Title(),
+			meta,
+			m.detailView.View(),
+			m.detailView.HelpText("r refresh"),
+			renderStatusBar(m.status),
+			lipgloss.Color("99"),
+		)
+	case m.confirming:
+		return overlay.RenderDialog(
+			m.windowWidth,
+			m.windowHeight,
+			"Confirm action",
+			fmt.Sprintf("%s %s\n\nProceed with this change?", strings.ToLower(actionName(m.pendingAction)), m.selectedTarget),
+			"[y] yes [n] no [esc] cancel",
+			renderStatusBar(m.status),
+			lipgloss.Color("214"),
+		)
+	default:
+		return base
 	}
-	help := "[j/k or ↑/↓] navigate [r] refresh [c] create [u] update [s] start [x] stop [d] delete [q] quit"
-	if m.confirming {
-		help = "Confirm action: [y] yes [n] no"
-	}
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
-	return fmt.Sprintf("%s\n\n%s\n\n%s\n%s", header, m.table.View(), help, footer)
 }
 
 func (m Model) renderForm() string {
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(m.formTitle))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Render(m.formTitle))
 	b.WriteString("\n\n")
 	for i, input := range m.formInputs {
-		b.WriteString(input.Prompt)
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("109")).Bold(true).Render(strings.TrimSpace(input.Prompt)))
+		b.WriteString("\n")
 		b.WriteString(input.View())
 		if errText, ok := m.formErrors[i]; ok {
 			b.WriteString("\n")
 			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  ! " + errText))
 		}
 		if i < len(m.formInputs)-1 {
-			b.WriteString("\n")
+			b.WriteString("\n\n")
 		}
 	}
 	return b.String()
@@ -250,6 +360,15 @@ func (m Model) refreshCmd() tea.Cmd {
 		defer cancel()
 		items, err := m.svc.ListInstances(ctx)
 		return instancesLoadedMsg{items: items, err: err}
+	}
+}
+
+func (m Model) detailCmd(target string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+		defer cancel()
+		detail, err := m.svc.GetInstanceDetail(ctx, target)
+		return instanceDetailLoadedMsg{target: target, detail: detail, err: err}
 	}
 }
 
@@ -330,6 +449,18 @@ func (m Model) currentName() string {
 	return row[0]
 }
 
+func (m Model) showingDetail() bool {
+	return m.detailView.Active()
+}
+
+func (m *Model) resizeDetailView(width, height int) {
+	m.detailView.SetSize(max(24, width), max(6, height))
+}
+
+func (m Model) OverlayActive() bool {
+	return m.formOpen || m.confirming || m.showingDetail()
+}
+
 func actionName(action Action) string {
 	switch action {
 	case ActionCreate:
@@ -377,7 +508,52 @@ func setFocusedInput(inputs []textinput.Model, index int) {
 
 func defaultTableStyles() table.Styles {
 	s := table.DefaultStyles()
-	s.Header = s.Header.Bold(true).BorderStyle(lipgloss.NormalBorder()).BorderBottom(true)
+	s.Header = s.Header.
+		Bold(true).
+		Foreground(lipgloss.Color("230")).
+		Background(lipgloss.Color("238")).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderBottom(true)
 	s.Selected = s.Selected.Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Bold(true)
+	s.Cell = s.Cell.Padding(0, 1)
 	return s
+}
+
+func renderPanel(title, body string, borderColor lipgloss.Color) string {
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(title) != "" {
+		parts = append(parts, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Render(title))
+	}
+	parts = append(parts, body)
+	return lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Render(strings.Join(parts, "\n\n"))
+}
+
+func renderStatusBar(status string) string {
+	color := lipgloss.Color("241")
+	lower := strings.ToLower(status)
+	switch {
+	case strings.Contains(lower, "failed"), strings.Contains(lower, "error"):
+		color = lipgloss.Color("196")
+	case strings.Contains(lower, "completed"), strings.Contains(lower, "loaded"), strings.Contains(lower, "viewing"), strings.Contains(lower, "back to list"):
+		color = lipgloss.Color("42")
+	case strings.Contains(lower, "loading"), strings.Contains(lower, "confirm"), strings.Contains(lower, "refreshing"), strings.Contains(lower, "starting"), strings.Contains(lower, "stopping"):
+		color = lipgloss.Color("214")
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(color).
+		Bold(true).
+		Render(status)
+}
+
+func (m Model) renderMeta() string {
+	selected := m.currentName()
+	if selected == "" {
+		selected = "-"
+	}
+	return fmt.Sprintf("Rows %d | Selected %s | Busy %t", len(m.table.Rows()), selected, m.busy)
 }

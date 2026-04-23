@@ -82,3 +82,27 @@ func TestLoadCLIConfigWithMissingFile(t *testing.T) {
 		t.Fatalf("loadCLIConfig() cfg is nil")
 	}
 }
+
+func TestIsLocalSocketPermissionError(t *testing.T) {
+	t.Run("unix socket permission denied", func(t *testing.T) {
+		err := &os.PathError{
+			Op:   "dial",
+			Path: "/var/lib/incus/unix.socket",
+			Err:  os.ErrPermission,
+		}
+		if !IsLocalSocketPermissionError(err) {
+			t.Fatalf("IsLocalSocketPermissionError() = false, want true")
+		}
+	})
+
+	t.Run("non socket permission denied", func(t *testing.T) {
+		err := &os.PathError{
+			Op:   "open",
+			Path: "/home/user/.config/incus/client.crt",
+			Err:  os.ErrPermission,
+		}
+		if IsLocalSocketPermissionError(err) {
+			t.Fatalf("IsLocalSocketPermissionError() = true, want false")
+		}
+	})
+}
