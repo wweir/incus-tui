@@ -20,12 +20,19 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Local build and package outputs
+/bin/
+/dist/
+
 # Go workspace file
 go.work
 go.work.sum
 
 # env file
 .env
+
+# Local agent scratch files
+.codex
 
 # Editor/IDE
 # .idea/
